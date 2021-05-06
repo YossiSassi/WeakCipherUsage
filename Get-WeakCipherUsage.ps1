@@ -1,5 +1,5 @@
 # Get weak cipher usage (RC4 used in Domain environments). useful for On-Prem diagnostics, similar to MDI (cloud app sec) weak cupher usage report.
-# Can be useful to assess if can move to AES only (see which systems still use RC4), as well as indication for potential Kerberoasting attack (with False Positives, since systems may generate downgrade TGS regardless of this attack).
+# Can be highly useful to assess if can move to AES only (see which systems still use RC4), as well as indication for potential Kerberoasting attack (with False Positives, since systems may generate downgrade TGS regardless of this attack).
 # By default, queries all Domain Controllers' Security events logs (requires Event Log Readers or equivalent/DA).
 # OPTIONAL: Can limit from a certain Time and Date (optional parameters), for shorter execution and avoid query overload in large environments/large Security Logs.
 # OPTIONAL: If using an Event Forwarder to log 4769 (Kerberos TGS events) from all DCs - can also specify an Event Forwarding server.
@@ -9,7 +9,8 @@ param (
         [cmdletbinding()]
         [string]$EventForwardingServer = $null,
         [datetime]$FromDate,
-        [datetime]$FromTime
+        [datetime]$FromTime,
+        [ValidateSet("CONSOLE+CSV","CONSOLE+CSV+GRID","CONSOLE ONLY")]$Output = "CONSOLE+CSV+GRID"
     )
 
 $CurrentEAP = $ErrorActionPreference
@@ -93,10 +94,12 @@ if (!$Events)
         exit
     }
 
-$SW = New-Object System.IO.StreamWriter $ReportName
-$sw.AutoFlush = $true
+if ($Output -ne "CONSOLE ONLY") {
+        $SW = New-Object System.IO.StreamWriter $ReportName
+        $sw.AutoFlush = $true
 
-$sw.WriteLine('UserName,IP,IPv4,Computername,SPNUser,TimeCreated,SPNs,DC')
+        $sw.WriteLine('UserName,IP,IPv4,Computername,SPNUser,TimeCreated,SPNs,DC')
+    }
 
 $Events | foreach {
     If ((([xml]($_.ToXml())).event.eventdata.data)[5].'#text' -eq "0x17") { #RC4
@@ -126,13 +129,15 @@ $Events | foreach {
 
         Write-Host "SPNs for $($SPNUser):`n $SPNs`n" -ForegroundColor Cyan
 
-        $sw.WriteLine("$UserName,$IP,$IPv4,$Computername,$SPNUser,$TimeCreated,$SPNs,$DC")
+        if ($Output -ne "CONSOLE ONLY") {
+                $sw.WriteLine("$UserName,$IP,$IPv4,$Computername,$SPNUser,$TimeCreated,$SPNs,$DC")
+            }
 
         Clear-Variable UserName, IP, IPv4, Computername, SPNUser, TimeCreated, SPNs, DC
     }
 }
 
-<#
+<# appendix: all relevant ticket encryption values, to modify according to your needs
 $Events | foreach {
     Switch ((([xml]($_.ToXml())).event.eventdata.data)[5].'#text')
     {       
@@ -161,7 +166,19 @@ $Events | foreach {
 }
 #>
 
-$sw.Close()
-$sw.Dispose()
+# Wrap up
+if ($Output -ne "CONSOLE ONLY") {
+        Write-Host "Report saved to $ReportName." -ForegroundColor Green
+
+        $sw.Close()
+        $sw.Dispose()
+    }
+
 Clear-Variable Events
+
+if ($Output -eq "CONSOLE+CSV+GRID")
+    {
+        Import-Csv $ReportName | Out-GridView -Title "Weak Cipher Usage Report"
+    }
+
 $ErrorActionPreference = $CurrentEAP
