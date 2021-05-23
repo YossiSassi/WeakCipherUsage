@@ -1,15 +1,14 @@
 # Get weak cipher usage (RC4 used in Domain environments). useful for On-Prem diagnostics, similar to MDI (cloud app sec) weak cupher usage report.
 # Can be highly useful to assess if can move to AES only (see which systems still use RC4), as well as indication for potential Kerberoasting attack (with False Positives, since systems may generate downgrade TGS regardless of this attack).
 # By default, queries all Domain Controllers' Security events logs (requires Event Log Readers or equivalent/DA).
-# OPTIONAL: Can limit from a certain Time and Date (optional parameters), for shorter execution and avoid query overload in large environments/large Security Logs.
+# OPTIONAL: Can limit from a certain Time and Date (optional parameters, X hours ago), for shorter execution and avoid query overload in large environments/large Security Logs.
 # OPTIONAL: If using an Event Forwarder to log 4769 (Kerberos TGS events) from all DCs - can also specify an Event Forwarding server.
 # Comments: 1nTh35h311 (yossis@protonmail.com)
 
 param (
         [cmdletbinding()]
         [string]$EventForwardingServer = $null,
-        [datetime]$FromDate,
-        [datetime]$FromTime,
+        [int]$Hours,
         [ValidateSet("CONSOLE+CSV","CONSOLE+CSV+GRID","CONSOLE ONLY")]$Output = "CONSOLE+CSV+GRID"
     )
 
@@ -34,28 +33,6 @@ $FilterFwdEvents = @'
 </QueryList>
 '@
 
-if ($FromDate -and $FromTime)
-{
-[string]$Date = "$($FromDate.Year)-$($FromDate.Month)-$($FromDate.Day)"
-[string]$Time = "$($FromTime.Hour):$($FromTime.Minute):$($FromTime.Second)"
-
-$FilterDCFromDateTime = @"
-<QueryList>
-  <Query Id="0" Path="Security">
-    <Select Path="Security">*[System[TimeCreated[@SystemTime&gt;='$($Date)T$($Time).000Z']]]</Select>
-  </Query>
-</QueryList>
-"@
-
-$FilterFwdEventsFromDateTime = @"
-<QueryList>
-  <Query Id="0" Path="Security">
-    <Select Path="Security">*[System[TimeCreated[@SystemTime&gt;='$($Date)T$($Time).000Z']]]</Select>
-  </Query>
-</QueryList>
-"@
-}
-
 $ReportName = "$(Get-Location)\WeakCipherUsage_$(get-date -Format ddMMyyyyHHmmss).csv"
 
 if (!$EventForwardingServer)
@@ -63,10 +40,10 @@ if (!$EventForwardingServer)
     {
         $Events = $DCs | ForEach-Object {
                 $DC = $_;
-                Write-Host "Fetching events from domain controller $DC..."
-                if ($FromDate)
+                Write-Host "Fetching events from domain controller $DC (parsing $("{0:N0}" -f ((Get-WinEvent -ComputerName $DC -ListLog Security).RecordCount)) entries)..."
+                if ($Hours)
                     {
-                        Get-WinEvent -FilterXml $FilterDCFromDateTime -ComputerName $DC
+                        Get-WinEvent -ComputerName $DC -FilterHashtable @{Logname='Security';id =4769;StartTime=$((Get-Date).AddHours(-$Hours))}
                     }
                 else
                     {
@@ -77,10 +54,10 @@ if (!$EventForwardingServer)
 else 
     # query an event forwarding log
     {
-        Write-Host "Fetching events from Event Forwarder $EventForwardingServer..."
-        if ($FromDate)
+        Write-Host "Fetching events from Event Forwarder (parsing $("{0:N0}" -f ((Get-WinEvent -ComputerName $EventForwardingServer -ListLog forwardedEvents).RecordCount)) entries)..."
+        if ($Hours)
                     {
-                        $Events = Get-WinEvent -FilterXml $FilterFwdEvents -ComputerName $EventForwardingServer
+                        $Events = Get-WinEvent -ComputerName $EventForwardingServer -FilterHashtable @{Logname='ForwardedEvents';id =4769;StartTime=$((Get-Date).AddHours(-$Hours))}
                     }
                 else
                     {
@@ -168,7 +145,7 @@ $Events | foreach {
 
 # Wrap up
 if ($Output -ne "CONSOLE ONLY") {
-        Write-Host "Report saved to $ReportName." -ForegroundColor Green
+        Write-Host "Report saved to $ReportName " -NoNewline -ForegroundColor Green; Write-Host "(Empty CSV means,- No RC4 usage discovered)."
 
         $sw.Close()
         $sw.Dispose()
