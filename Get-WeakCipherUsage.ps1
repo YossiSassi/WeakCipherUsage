@@ -1,9 +1,16 @@
-# Get weak cipher usage (RC4 used in Domain environments). useful for On-Prem diagnostics, similar to MDI (cloud app sec) weak cupher usage report.
-# Can be highly useful to assess if can move to AES only (see which systems still use RC4), as well as indication for potential Kerberoasting attack (with False Positives, since systems may generate downgrade TGS regardless of this attack).
-# By default, queries all Domain Controllers' Security events logs (requires Event Log Readers or equivalent/DA).
-# OPTIONAL: Can limit from a certain Time and Date (optional parameters, X hours ago), for shorter execution and avoid query overload in large environments/large Security Logs.
-# OPTIONAL: If using an Event Forwarder to log 4769 (Kerberos TGS events) from all DCs - can also specify an Event Forwarding server.
-# Comments: 1nTh35h311 (yossis@protonmail.com)
+<# 
+### Get weak cipher usage (discover RC4 usage in Active Directory Domain environments) ###
+Useful for On-Prem diagnostics, overall attack surface analysis and/or preparation for Server 2025 AD upgrade (by default disables RC4 tickets). Similar to MDI (cloud app sec) weak cipher usage.
+Can be highly useful to assess if can move to AES only (see which systems still use RC4), as well as indication for potential Kerberoasting attack (with False Positives, since systems may generate downgrade TGS regardless of this attack).
+
+By default, queries all Domain Controllers' Security events logs (requires Event Log Readers or equivalent/DA).
+
+OPTIONAL: Can limit from a certain Time and Date (optional parameter, XXXX hours ago), for shorter execution and avoid query overload in large environments/large Security Logs.
+OPTIONAL: If using an Event Forwarder to log 4769 (Kerberos TGS events) from all DCs - can also specify an Event Forwarding server.
+
+Comments: 1nTh35h311 (yossis@protonmail.com)
+v1.1
+#>
 
 param (
         [cmdletbinding()]
@@ -72,16 +79,16 @@ if (!$Events)
     }
 
 if ($Output -ne "CONSOLE ONLY") {
-        $SW = New-Object System.IO.StreamWriter $ReportName
-        $sw.AutoFlush = $true
+        $SW = New-Object System.IO.StreamWriter $ReportName;
+        $sw.AutoFlush = $true;
 
-        $sw.WriteLine('UserName,IP,IPv4,Computername,SPNUser,TimeCreated,SPNs,DC')
+        $sw.WriteLine('AccountName,IP,IPv4,Computername,SPNUser,TimeCreated,SPNs,DC')
     }
 
 $Events | foreach {
     If ((([xml]($_.ToXml())).event.eventdata.data)[5].'#text' -eq "0x17") { #RC4
         
-        $UserName = (([xml]($_.ToXml())).event.eventdata.data)[0].'#text'
+        $AccountName = (([xml]($_.ToXml())).event.eventdata.data)[0].'#text'
         $IP = ((([xml]($_.ToXml())).event.eventdata.data)[6].'#text')
         
         if ($IP -ne "::1")
@@ -101,16 +108,16 @@ $Events | foreach {
         $SPNUser = (([xml]($_.ToXml())).event.eventdata.data)[2].'#text'
         $SPNs = $([adsisearcher]"(samaccountname=$((([xml]($_.ToXml())).event.eventdata.data)[2].'#text'))").FindOne().Properties.serviceprincipalname
 
-        Write-Host "RC4 usage by $UserName from IP $IP (IPv4: $IPv4, Hostname: $ComputerName) at $TimeCreated on Domain Controller $DC." -ForegroundColor Yellow
+        Write-Host "RC4 usage by $AccountName from IP $IP (IPv4: $IPv4, Hostname: $ComputerName) at $TimeCreated on Domain Controller $DC." -ForegroundColor Yellow
         Write-Host "SPN user (accessed Service Principal Name): $SPNUser" -ForegroundColor Yellow
 
         Write-Host "SPNs for $($SPNUser):`n $SPNs`n" -ForegroundColor Cyan
 
         if ($Output -ne "CONSOLE ONLY") {
-                $sw.WriteLine("$UserName,$IP,$IPv4,$Computername,$SPNUser,$TimeCreated,$SPNs,$DC")
+                $sw.WriteLine("$AccountName,$IP,$IPv4,$Computername,$SPNUser,$TimeCreated,$SPNs,$DC")
             }
 
-        Clear-Variable UserName, IP, IPv4, Computername, SPNUser, TimeCreated, SPNs, DC
+        Clear-Variable AccountName, IP, IPv4, Computername, SPNUser, TimeCreated, SPNs, DC
     }
 }
 
@@ -145,10 +152,20 @@ $Events | foreach {
 
 # Wrap up
 if ($Output -ne "CONSOLE ONLY") {
-        Write-Host "Report saved to $ReportName " -NoNewline -ForegroundColor Green; Write-Host "(Empty CSV means,- No RC4 usage discovered)."
-
+        # close streamWriter and handles
         $sw.Close()
         $sw.Dispose()
+
+        if ($(Get-Content $ReportName).count -eq 1) 
+            { # no RC4 usage discovered
+                Write-Host "No RC4 usage discovered. Quiting." -NoNewline -ForegroundColor Yellow;
+                Remove-Item $ReportName -Force
+            }
+
+        else
+            {
+                Write-Host "Report saved to $ReportName." -NoNewline -ForegroundColor Green
+            }
     }
 
 Clear-Variable Events
